@@ -5,6 +5,7 @@ from qfluentwidgets import SettingCardGroup, PushSettingCard, ScrollArea, InfoBa
 from .card.pushsettingcard1 import PushSettingCardCode
 from .card.autoplot_setting_card import AutoPlotSettingCard
 from .common.style_sheet import StyleSheet
+from .common.icon import UiIcon
 import tasks.tool as tool
 import base64
 import subprocess
@@ -13,9 +14,11 @@ from module.config import cfg
 from tasks.base.tasks import start_task
 import os
 import sys
+import traceback
 
 
 from module.localization import tr
+from module.logger import log
 
 
 class ToolsInterface(ScrollArea):
@@ -29,13 +32,13 @@ class ToolsInterface(ScrollArea):
 
         self.ToolsGroup = SettingCardGroup(tr('工具箱'), self.scrollWidget)
         self.automaticPlotCard = AutoPlotSettingCard(
-            FIF.IMAGE_EXPORT,
+            FIF.CHAT,
             tr("自动对话"),
             tr("进入剧情页面后自动开始运行，支持大于等于 1920*1080 的 16:9 分辨率，不支持云·星穹铁道")
         )
         self.gameScreenshotCard = PushSettingCard(
             tr('捕获'),
-            FIF.CLIPPING_TOOL,
+            FIF.CAMERA,
             tr("游戏截图"),
             tr("检查程序获取的图像是否正确，支持OCR识别文字（可用于自行排查异常）")
         )
@@ -47,25 +50,28 @@ class ToolsInterface(ScrollArea):
         )
         self.redemptionCodeCard = PushSettingCardCode(
             tr('执行'),
-            FIF.BOOK_SHELF,
+            UiIcon.TICKET,
             tr("兑换码"),
             "redemption_code",
             self
         )
         self.cloudTouchCard = PushSettingCard(
             tr('启动'),
-            FIF.CLOUD,
+            UiIcon.TAP,
             tr("触屏模式"),
             tr("以云游戏移动端 UI 的方式启动游戏，可搭配 UU远程 平板触控模式，启动后会将命令复制到剪贴板内")
         )
         self.screenTestCard = PushSettingCard(
             tr('测试'),
-            FIF.CHECKBOX,
+            UiIcon.BEAKER,
             tr("界面可切换性测试"),
             tr("以最短路径遍历所有可达界面，验证界面切换是否正常")
         )
 
         self.__initWidget()
+
+        if sys.platform == 'win32' and self.automaticPlotCard.getSwitchState():
+            self.__startAutoPlot()
 
     def __initWidget(self):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -117,7 +123,7 @@ class ToolsInterface(ScrollArea):
                 break
 
     def __onUnlockfpsCardClicked(self):
-        from utils.registry.star_rail_setting import get_game_fps, set_game_fps  # 延迟导入，避免非 Windows 平台报错
+        from utils.registry.star_rail_setting import get_game_fps, set_game_fps, MissingFPSSettingError  # 延迟导入，避免非 Windows 平台报错
         try:
             fps = get_game_fps()
             if fps == 120:
@@ -142,10 +148,19 @@ class ToolsInterface(ScrollArea):
                     duration=1000,
                     parent=self
                 )
-        except:
+        except Exception as e:
+            if isinstance(e, MissingFPSSettingError):
+                content = tr("请将游戏图像质量修改为自定义后重试")
+                log.warning("解锁帧率失败：请将游戏图像质量修改为自定义后重试")
+            else:
+                log.error(f"解锁帧率失败：{e}\n{traceback.format_exc()}")
+                error = f"{type(e).__name__}: {' '.join(str(e).split())}"
+                if len(error) > 80:
+                    error = error[:79] + "…"
+                content = tr("{error}（详情见日志）").format(error=error)
             InfoBar.warning(
                 title=tr('解锁失败'),
-                content=tr("请将游戏图像质量修改为自定义后重试"),
+                content=content,
                 orient=Qt.Orientation.Horizontal,
                 isClosable=True,
                 position=InfoBarPosition.TOP,
@@ -289,12 +304,9 @@ class ToolsInterface(ScrollArea):
 
     def __onAutoPlotSwitchChanged(self, isChecked: bool):
         """Handle auto plot switch state change"""
+        cfg.set_value("autoplot_enable", isChecked and bool(cfg.get_value("autoplot_remember_enable", False)))
         if isChecked:
-            # Update options first
-            options = self.automaticPlotCard.getOptions()
-            tool.update_plot_options(options)
-            # Start auto plot
-            tool.start("plot")
+            self.__startAutoPlot()
             InfoBar.success(
                 title=tr('自动对话已启动'),
                 content="",
@@ -316,6 +328,10 @@ class ToolsInterface(ScrollArea):
                 duration=1000,
                 parent=self
             )
+
+    def __startAutoPlot(self):
+        tool.update_plot_options(self.automaticPlotCard.getOptions())
+        tool.start("plot")
 
     def __onAutoPlotOptionsChanged(self, options: dict):
         """Handle auto plot options change"""
